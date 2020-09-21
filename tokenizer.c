@@ -1,15 +1,17 @@
 /**
  * 解析 ngx 配置文件
- * 调用接口 ``get_token`` 返回一个 token 值
+ * 调用 `get_token` 函数返回一个 token 值
  */
 
 #include "tokenizer.h"
+
+#include <ctype.h>  /* ispunct, isalnum */
 #include <stdio.h>  /* FILE, fgetc, ftell, fseek */
 
-#define LINE_LIMIT 1024             /* NGX配置文件每行最长限制 */
-#define NAME_LIMIT 256              /* NGX标识符最长限制 */
+#define LINE_LIMIT 2048             /* NGX配置文件每行最长限制 */
+#define NAME_LIMIT 1024             /* NGX标识符最长限制 */
 
-FILE *ngx_conf_fp;                  /* 文件 FILE 指针 */
+extern FILE *g_ngxconf_fp;          /* 文件指针 */
 static char file_closed = 0;        /* 文件是否关闭 */
 static size_t curr_row = 1;         /* 当前行 */
 static size_t curr_col = 1;         /* 当前列 */
@@ -24,9 +26,9 @@ read1()
     if (file_closed)
         return -1;  /* EOF */
 
-    if ((next = fgetc(ngx_conf_fp)) == EOF) {
+    if ((next = fgetc(g_ngxconf_fp)) == EOF) {
         file_closed = 1;
-        fclose(ngx_conf_fp);
+        fclose(g_ngxconf_fp);
     } else if (next == '\n') {
         ++curr_row;
         curr_row_end_col = curr_col;
@@ -42,11 +44,11 @@ read1()
 static void
 unread1()
 {
-    if (ftell(ngx_conf_fp) == 0 || file_closed)
+    if (ftell(g_ngxconf_fp) == 0 || file_closed)
         return;
     
-    fseek(ngx_conf_fp, -1, SEEK_CUR);                /* 文件内部指针回退一步 */
-    if (curr_row != 1 && curr_col == 1) {   /* 表示上个字符为 '\n' */
+    fseek(g_ngxconf_fp, -1, SEEK_CUR);       /* 文件内部指针回退一步 */
+    if (curr_row != 1 && curr_col == 1) {    /* 表示上个字符为 '\n' */
         --curr_row;
         curr_col = curr_row_end_col;
     } 
@@ -66,29 +68,27 @@ readline(char *line)
     while (--maxline > 0 && (rv = read1()) != EOF && rv != '\n') {
         *p++ = rv;
     }
-    if (rv == '\n' || EOF)
+    if (rv == '\n')
         unread1();  /* 回退一步 */
     *p++ = '\0';
     return line;
 }
 
 
-/** 是否是 ngx 合法字符串 
- *  todo: 严格标准
+/** 
+ * 是否是 ngx 合法标识符
  */
 static char
 is_ngx_ident(char c)
 {
-   return isalnum(c)    \
-          || c == '$'   \
-          || c == '_'   \
-          || c == '.'   \
-          || c == '\\'  \
-          || c == '/'   \
-          || c == '"'   \
-          || c == '\''  \
-          || c == '~'   \
-          || c == '-';
+    return (c != ';'
+        && c != '{'
+        && c != '}'
+        && c != '\''
+        && c != '"'
+        && c != '#'
+        && ispunct(c)
+    ) || isalnum(c);
 }
 
 
@@ -100,12 +100,27 @@ parse()
     static char name_buf[NAME_LIMIT];
     token_info_t r;
 
-    int next = read1(); 
+    int g_next = read1();
+
+    /* 丢弃空白 */
+    if (isspace(g_next)) {
+        int next;
+        do {
+            next = read1();
+        } while (isspace(next));
+        unread1();  /* 回退一步 */
+    }
+
+    /* 丢弃注释 */
+    if (g_next == '#') {
+        char *p = line_buf;
+        readline(p);
+    }
     
     /* 解析标识符名称 */
-    if (is_ngx_ident(next) && next != EOF) {
-         char *p = name_buf;
-        *p++= next;
+    if (is_ngx_ident(g_next) && g_next != EOF) {
+        char *p = name_buf;
+        *p++= g_next;
 
         int next;
         while (is_ngx_ident(next = read1()) && next != EOF) {
@@ -116,27 +131,23 @@ parse()
 
         r.type = NGX_NAME;
         r.value = name_buf;
-        r.col = curr_col;
-        r.row = curr_row; 
-        return r; 
+        goto end;
     }
 
-    /* 解析注释，直接丢弃不保存 */
-    if (next == '#') {
-        char *p = line_buf;
-        readline(p);
-    }
-    
-    /* 丢弃空白 */
-    if (isspace(next)) {
+    /* 解析字符串 */
+    if (g_next == '\'' || g_next == '"') {
+        char *p = name_buf;
         int next;
-        do {
-             next = read1();
-        } while (isspace(next));
-        unread1();  /* 回退一步 */
+        while ((next = read1()) != g_next && next != '\n') {
+            *p++ = next;
+        }
+        *p++ = '\0';
+        r.type = NGX_NAME;
+        r.value = name_buf;
+        goto end;
     }
 
-    switch (next) {
+    switch (g_next) {
     case '{':
         r.type = NGX_START_BLOCK;
         r.value = "{";
@@ -157,6 +168,7 @@ parse()
         /* 递归 */
         return parse();
     }
+end:
     r.col = curr_col;
     r.row = curr_row;
     return r;

@@ -7,25 +7,25 @@
 /* 定义 token */
 typedef enum {
     NGX_UNKNOW = -1,
-    NGX_NAME,           /* 连续字符串 */
+    NGX_NAME,           /* 标识符 */
     NGX_OK,             /* ";" */
     NGX_START_BLOCK,    /* "{" */
     NGX_END_BLOCK,      /* "}" */
-    NGX_END,            /* "EOF" */
+    NGX_END = 32,       /* "EOF" */
 } token_t;
 
 /* token 上下文信息 */
-typedef struct token_info {
-    token_t type;   /* token */
+typedef struct {
+    token_t type;   /* token 类型 */
     char *value;    /* token 值 */
     size_t row;     /* token 所在行 */
     size_t col;     /* token 所在列 */
 } token_info_t;
 
 /* 文件 FILE 指针 */
-extern FILE *ngx_conf_fp;
+FILE *g_ngxconf_fp;
 
 /* 返回一个 token 值 */
-extern token_info_t get_token(FILE *fp);
+token_info_t get_token(FILE *fp);
 
 #endif  /* TOKENIZER_H__ */
